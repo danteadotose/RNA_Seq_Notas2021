@@ -1,0 +1,34 @@
+---
+title: "Objetos Bioconductor"
+author: "DanteTorres"
+date: "2/25/2021"
+output: html_document
+---
+
+**SummarizedExperiment:**
+
+Tiene al menos esta información, pero puede tener más. Las filas corresponden a características y las columnas a muestras. El componente expData contiene la información a nivel experimento. Puede entenderse como una base de datos que ya está lista para ser usada por el usuario.
+
+**GenomicRanges:**
+
+Está diseñada para almacenar de forma eficiente información de los genes. Este objeto es utilizado dentro de SumarizedExperiment. Guarda el nombre, rango, cadena,  %C-G.
+
+**Informacion de los genes:**
+
+- rowRanges(rse) (Todo)
+
+Tabla con información de los genes:
+
+- rowData(rse) (Feature ID)
+
+Tabla con información de las muestras:
+
+- colData(rse)
+
+Ejercicio 1:
+
+El comando está actuando solo sobre las RowData del objeto, limitando solo a la fila 1 y 2, pero dejando toda la otra información intacta. El segundo comando actúa igual, solo que delimita la colData. Funcionan como un which.
+
+**Procesamiento de datos crudos con recount3:**
+
+Este proyecto permite analizar datos crudos sin que sea necesario tener acceso a una computadora poderosísima. Permite cuantificar datos de expresión a lo largo de genomas, exones y secuencias en general.
