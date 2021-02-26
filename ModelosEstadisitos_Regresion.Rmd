@@ -1,0 +1,135 @@
+---
+title: "Modelos Estadísticos"
+author: "DanteTorres"
+date: "2/25/2021"
+output: html_document
+---
+
+
+### **Modelos Estadísticos:**
+
+**Regresión Lineal:**
+
+Para ajustar datos a un modelo de regresión lineal en R, usamos la función model.matrix(), que funciona tanto con variables categóricas como con numéricas. ¿Cómo decides usar * o +? El asterisco se utiliza cuando las variables están relacionadas entre sí. Si tenemos 20,000 genes estamos haciendo 20,000 regresiones lineales. 
+
+**Explore Model Matrix:**
+
+Paquete en R utilizado mucho para expresión diferencial. Tiene funciones para hacer imágenes de esas matruces de model.matrix pero de forma mucho más compleja.
+
+Cuando usamos la variable de intercept, uno de nuestros grupos lo estamos usando como referencia, eso significa que, en cuanto a numeros, esa variable sería tomada como 1. 
+
+
+```{r include=FALSE}
+library("recount3")
+library("edgeR") 
+library("limma")
+
+
+human_projects <- available_projects()
+
+rse_gene_SRP045638 <- create_rse(
+    subset(
+        human_projects,
+        project == "SRP045638" & project_type == "data_sources"
+    )
+)
+
+```
+
+
+```{r}
+
+assay(rse_gene_SRP045638, "counts") <- compute_read_counts(rse_gene_SRP045638)
+
+# Elimina informacion presente solo en ciertas muestras
+rse_gene_SRP045638$sra.sample_attributes <- gsub("dev_stage;;Fetal\\|", "", rse_gene_SRP045638$sra.sample_attributes)
+rse_gene_SRP045638 <- expand_sra_attributes(rse_gene_SRP045638)
+
+
+## Pasar de character a nuemric o factor
+rse_gene_SRP045638$sra_attribute.age <- as.numeric(rse_gene_SRP045638$sra_attribute.age)
+rse_gene_SRP045638$sra_attribute.disease <- factor(rse_gene_SRP045638$sra_attribute.disease)
+rse_gene_SRP045638$sra_attribute.RIN <- as.numeric(rse_gene_SRP045638$sra_attribute.RIN)
+rse_gene_SRP045638$sra_attribute.sex <- factor(rse_gene_SRP045638$sra_attribute.sex)
+
+
+## Encontraremos diferencias entre muestra prenatalas vs postnatales
+rse_gene_SRP045638$prenatal <- factor(ifelse(rse_gene_SRP045638$sra_attribute.age < 0, "prenatal", "postnatal"))
+
+## http://research.libd.org/recount3-docs/docs/quality-check-fields.html
+rse_gene_SRP045638$assigned_gene_prop <- rse_gene_SRP045638$recount_qc.gene_fc_count_all.assigned / rse_gene_SRP045638$recount_qc.gene_fc_count_all.total
+rse_gene_SRP045638 <- rse_gene_SRP045638[, rse_gene_SRP045638$assigned_gene_prop > 0.3]
+
+## Calculemos los niveles medios de expresión de los genes en nuestras
+## muestras.
+## Ojo: en un análisis real probablemente haríamos esto con los RPKMs o CPMs
+## en vez de las cuentas.
+gene_means <- rowMeans(assay(rse_gene_SRP045638, "counts"))
+summary(gene_means)
+
+## Eliminamos genes
+rse_gene_SRP045638 <- rse_gene_SRP045638[gene_means > 0.1, ]
+```
+
+**Normalización:**
+
+Segmento de artículo leído:
+
+Estimated normalization factors should ensure that a gene with the same expression level in two samples is not detected as DE. To further highlight the need for more sophisticated normalization procedures in RNA-seq data, consider a simple thought experiment. Imagine we have a sequencing experiment comparing two RNA populations, A and B. In this hypothetical scenario, suppose every gene that is expressed in B is expressed in A with the same number of transcripts. However, assume that sample A also contains a set of genes equal in number and expression that are not expressed in B. Thus, sample A has twice as many total expressed genes as sample B, that is, its RNA production is twice the size of sample B. Suppose that each sample is then sequenced to the same depth. Without any additional adjustment, a gene expressed in both samples will have, on average, half the number of reads from sample A, since the reads are spread over twice as many genes. Therefore, the correct normalization would adjust sample A by a factor of 2.
+
+Librería: Lima, edgeR
+
+Funciones: voom(), lmfit()
+
+La normalización de datos, específicamemte con estos paquetes, sirve y permite hacer un anáñisis de expresion diferencial con datos mucho más confiables. Parte importante de este proceso es la filtración de datos no significativos.
+
+```{r echo=TRUE}
+
+dge <- DGEList(
+    counts = assay(rse_gene_SRP045638, "counts"),
+    genes = rowData(rse_gene_SRP045638)
+)
+dge <- calcNormFactors(dge)
+
+# Generacion del modelo estadístico
+mod <- model.matrix(~ prenatal + sra_attribute.RIN + sra_attribute.sex + assigned_gene_prop,
+    data = colData(rse_gene_SRP045638)
+)
+colnames(mod)
+
+# Analisis de expresion diferencial usando limma.
+vGene <- voom(dge, mod, plot = TRUE)
+eb_results <- eBayes(lmFit(vGene))
+
+de_results <- topTable(
+    eb_results,
+    coef = 2,
+    number = nrow(rse_gene_SRP045638),
+    sort.by = "none"
+)
+
+
+## Extraer valores de los genes de interés
+exprs_heatmap <- vGene$E[rank(de_results$adj.P.Val) <= 50, ]
+## Creemos una tabla con información de las muestras y con nombres de columnas más amigables
+
+
+## De vGene$E podemos extraer los datos normalizados por limma-voom. Revisemos los top 50 genes diferencialmente expresados.
+df <- as.data.frame(colData(rse_gene_SRP045638)[, c("prenatal", "sra_attribute.RIN", "sra_attribute.sex")])
+colnames(df) <- c("AgeGroup", "RIN", "Sex")
+
+## Hagamos un heatmap
+library("pheatmap")
+pheatmap(
+    exprs_heatmap,
+    cluster_rows = TRUE,
+    cluster_cols = TRUE,
+    show_rownames = FALSE,
+    show_colnames = FALSE,
+    annotation_col = df
+)
+
+
+```
+
+
