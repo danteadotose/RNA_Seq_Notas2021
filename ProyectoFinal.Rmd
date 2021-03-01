@@ -1,0 +1,227 @@
+---
+title: "Proyecto Final"
+author: "Dante Torres Sepulveda"
+output:
+  html_document:
+    code_folding: show
+---
+&nbsp;
+
+### Proyecto: Análisis de expresión diferencial.
+
+&nbsp;
+
+**Título del artículo:** *"Sex-specific transcriptional signatures in human depression"*
+
+**Abstract:**
+Major depressive disorder (MDD) is a leading cause of disease burden worldwide. While the incidence, symptoms and treatment of MDD all point toward major sex differences, the molecular mechanisms underlying this sexual dimorphism remain largely unknown. Here, combining differential expression and gene coexpression network analyses, we provide a comprehensive characterization of male and female transcriptional profiles associated with MDD across six brain regions. We overlap our human profiles with those from a mouse model, chronic variable stress, and capitalize on converging pathways to define molecular and physiological mechanisms underlying the expression of stress susceptibility in males and females. Our results show a major rearrangement of transcriptional patterns in MDD, with limited overlap between males and females, an effect seen in both depressed humans and stressed mice. We identify key regulators of sex-specific gene networks underlying MDD and confirm their sex-specific impact as mediators of stress susceptibility. For example, downregulation of the female-specific hub gene Dusp6 in mouse prefrontal cortex mimicked stress susceptibility in females, but not males, by increasing ERK signaling and pyramidal neuron excitability. Such Dusp6 downregulation also recapitulated the transcriptional remodeling that occurs in prefrontal cortex of depressed females. Together our findings reveal marked sexual dimorphism at the transcriptional level in MDD and highlight the importance of studying sex-specific treatments for this disorder.
+
+**Referencias:** 
+
+Labonté, B., Engmann, O., Purushothaman, I., Menard, C., Wang, J., Tan, C., Scarpa, J. R., Moy, G., Loh, Y. E., Cahill, M., Lorsch, Z. S., Hamilton, P. J., Calipari, E. S., Hodes, G. E., Issler, O., Kronman, H., Pfau, M., Obradovic, A., Dong, Y., Neve, R. L., … Nestler, E. J. (2017). Sex-specific transcriptional signatures in human depression. Nature medicine, 23(9), 1102–1111. https://doi.org/10.1038/nm.4386
+
+&nbsp;
+
+
+#### Guardando datos del artículo:
+```{r message = FALSE, comment = '', results='asis'}
+library("recount3")
+library("edgeR")
+library("ggplot2")
+library("limma")
+library("pheatmap")
+library("RColorBrewer")
+
+# En este bloque se descargan los datos y las librerías.
+human_projects <- available_projects()
+proj_info <- subset(
+    human_projects,
+    project == "SRP115956" & project_type == "data_sources"
+)
+
+# Se crea el objeto RSE con la informacion a nivel de genes
+rse_gene_SRP115956 <- create_rse(proj_info)
+
+assay(rse_gene_SRP115956, "counts") <- compute_read_counts(rse_gene_SRP115956)
+
+rse_gene_SRP115956 <- expand_sra_attributes(rse_gene_SRP115956)
+
+```
+&nbsp;
+
+
+#### Procesamiento de datos:
+```{r message = FALSE, comment = '', results='markup'}
+
+# Se  ajustan los tipos de datos de acuerdo a la variable que representan y se hace una limpieza de datos.
+rse_gene_SRP115956$sra_attribute.gender <- factor(rse_gene_SRP115956$sra_attribute.gender)
+rse_gene_SRP115956$sra_attribute.phenotype <- factor(rse_gene_SRP115956$sra_attribute.phenotype)
+
+
+# Se selecciona la categoría con la que se va a hacer el análisis
+rse_gene_SRP115956$Depressed <- factor(ifelse(rse_gene_SRP115956$sra_attribute.phenotype == "MDD", "Depressed", "Control"))
+
+
+# Seleccionamos los datos de expresión diferencial importantes
+rse_gene_SRP115956$assigned_gene_prop <- rse_gene_SRP115956$recount_qc.gene_fc_count_all.assigned / rse_gene_SRP115956$recount_qc.gene_fc_count_all.total
+rse_gene_SRP115956_unfiltered <- rse_gene_SRP115956
+hist(rse_gene_SRP115956$assigned_gene_prop, col = colorRampPalette(c("blue", "red"))( 4 ), xlab = "Asigned Gene Proportion", main = "Puntos de corte para eliminar muestras")
+
+
+# Filtramos muestras malas o poco significativas. El punto de corte se obtuvo viendo los datos anteriores
+rse_gene_SRP115956 <- rse_gene_SRP115956[, rse_gene_SRP115956$assigned_gene_prop > 0.3]
+gene_means <- rowMeans(assay(rse_gene_SRP115956, "counts"))
+rse_gene_SRP115956 <- rse_gene_SRP115956[gene_means > 0.34, ]
+```
+
+```{r echo=FALSE, comment = ''}
+# Visualizacion de datos de interes
+
+cat("Porcentaje de genes con los que nos quedamos despues del filtro:\n%", (round(nrow(rse_gene_SRP115956) / nrow(rse_gene_SRP115956_unfiltered) * 100, 2)))
+cat("Diferencias en niveles de expresion de los grupos:")
+with(colData(rse_gene_SRP115956), tapply(assigned_gene_prop, Depressed, summary))
+cat("Niveles medios de expresion de las muestras:")
+summary(gene_means)
+
+```
+
+
+&nbsp;
+
+#### Definición del modelo estadístico:
+```{r message = FALSE, comment = '', results='markup', fig.show='hold', warning=FALSE, fig.align='center'}
+
+layout(matrix(c(1,2,0,0), 1,2 , byrow = TRUE))
+
+# Normalizacion de Datos:
+dge <- DGEList(
+    counts = assay(rse_gene_SRP115956, "counts"),
+    genes = rowData(rse_gene_SRP115956)
+)
+dge <- calcNormFactors(dge)
+
+
+# Seleccion de modelo estadistico
+modDepression <- model.matrix(~ Depressed + sra_attribute.gender + assigned_gene_prop,
+                    data = colData(rse_gene_SRP115956))
+
+colnames(modDepression)
+
+# Grafica de varianza vs valores de expresion de los genes.
+vGene <- voom(dge, modDepression, plot = TRUE)
+eb_results <- eBayes(lmFit(vGene))
+
+de_results <- topTable(
+    eb_results,
+    coef = 2,
+    number = nrow(rse_gene_SRP115956),
+    sort.by = "none"
+)
+
+cat("Numero de genes con P-Value menor a 0.05")
+table(de_results$adj.P.Val < 0.05)
+# Seleccionar los protein coding genes con mayor expresión diferencial
+indices <- which(de_results$adj.P.Val < 0.05 & de_results$gene_type == "protein_coding")
+limite <- median(sort(de_results[indices,"adj.P.Val"]))
+best_de_genes <- which(de_results$adj.P.Val < limite & de_results$gene_type == "protein_coding")
+cat("Genes codificantes con la mayor diferencia de expresion entre los grupos:\n",de_results[best_de_genes,"gene_name"])
+
+# Grafica con los 3 genes con expresion diferencial más significativa.
+volcanoplot(eb_results, coef = 2, highlight = 3, names = de_results$gene_name)
+
+```
+&nbsp;
+
+
+#### Analisis estadístico expresión diferencial:
+
+**La gráfica de la izquierda** representa la función que ajusta la desviación estandar de los genes analizados a sus valores de expresión. Esto genera una relación más directa y certera entre los valores de expresión y la varianza de los genes.
+
+**La gráfica de la derecha** nos permite observar los genes con mayor señal de expresión diferencial, mientras más lejos estén del eje X, más significativo es el valor P, esto es consistente con el decremento de puntos a medida que los valores en el eje Y crecen. RP11 y ARL17B tienen funciones congruentes con el análisis. De BMSP1P2 no encontré relación aparente.
+
+
+
+```{r message = FALSE, comment = '', results='markup', fig.show='hold', warning=FALSE, fig.align='center'}
+
+exprs_heatmap <- vGene$E[rank(de_results$adj.P.Val) <= 30, ]
+df <- as.data.frame(colData(rse_gene_SRP115956)[, c("Depressed", "sra_attribute.gender")])
+colnames(df) <- c("Phenotype", "Gender")
+
+# Nombres de las columnas del heatmap
+rownames(exprs_heatmap) <- rowRanges(rse_gene_SRP115956)$gene_name[
+    match(rownames(exprs_heatmap), rowRanges(rse_gene_SRP115956)$gene_id)
+]
+
+pheatmap(
+    exprs_heatmap,
+    cluster_rows = TRUE,
+    cluster_cols = TRUE,
+    show_rownames = TRUE,
+    show_colnames = FALSE,
+    fontsize_row = 6, 
+    annotation_col = df
+)
+
+```
+&nbsp;
+
+#### Análisis visual expresión diferencial:
+
+**En este heatmap** podemos observar algunas diferencias entre los niveles de expresión del grupo control y dek grupo con transtorno de depresión, tomando en cuenta el  género de los participantes. A simple vista es un poco difícil distinguir las diferencias, sin embargo, en genes como NR4A3, NPAS4, RP11- y FSHB es bastante claro que existe un aumento o decremento de la expresión génica. De acuerdo a estudios que menciono abajo, estos genes mostraron tener relación con comportamientos asociados a desordenes mentales, lo que le da sustento a los resultados. Por otro lado, también existen cambios de expresión en genes que, aparentemente, no tendrían por qué estar involucrados con estos tipos de enfermedades. Esto se puede deber a la baja calidad de las muestras, el poco numero de individuos que participaron, o a la escasa información disponible sobre los genes en sí. 
+
+**En general**, podríamos concluír que no es muy evidente la expresión diferencial de los genes relacionados con el transtorno de depresión, sin embargo, si hay genes con un cambio importante y que, en algunos casos son dependientes del género. (Momentos en los que coinciden mujeres con depresion y genes diferencialmente expresados).
+
+
+```{r message = FALSE, comment = '', results='markup', fig.show='hold', warning=FALSE, fig.align='center'}
+
+# Model Matrix Plot
+col.group <- df$Phenotype
+levels(col.group) <- brewer.pal(nlevels(col.group), "Set1")
+col.group <- as.character(col.group)
+plotMDS(vGene$E, labels = df$Phenotype, col = col.group)
+
+col.group <- df$Gender
+levels(col.group) <- brewer.pal(nlevels(col.group), "Accent")
+col.group <- as.character(col.group)
+plotMDS(vGene$E, labels = df$Gender, col = col.group)
+
+# Diagrama de Venn con los resultados de expresión diferencial
+results <- decideTests(eb_results)
+vennDiagram(results[,1:4],
+            include= "both", names = c("Control", "Depressed","Male","Female"),
+            circle.col= colorRampPalette(c("blue", "red", "green", "yellow"))( 4 ),
+            show.include = FALSE)
+
+
+```
+&nbsp;
+
+#### Perfiles de expresión de los resultados:
+&nbsp;
+
+No hay una relación muy clara entra la diferencia de expresión diferencial entre el grupo con depresión y el control, A diferencia de la figura en la que se compara el género, la cual muestra una separación muy clara. 
+
+En el diagrama de Ven se puede ver los genes diferencialmente expresados entre el grupo control y el grupo con depresión.La suma de la union Control-Depresion es consistente con el número de genes con expresión diferencial significativa.
+
+&nbsp;
+&nbsp;
+
+#### Info adicional:
+&nbsp;
+
+
+**Estos son algunos de los genes codificantes de proteínas que mostraron una diferencia significativa en los valores de expresión y que mostraron tener un papel importante en sintomas relacionados transtorno de depresión u otras enfermedades mentales.**
+
+**Npas4: Factor de transcripción importante en la sinapsis neuronal**
+"The deletion of Npas4 in D1R-expressing MSNs impairs cocaine-induced place preference, which is rescued by Npas4-wild-type (WT), but not by a phospho-deficient Npas4 mutant. These observations suggest that MAPK phosphorylates Npas4 in D1R-MSNs and increases transcriptional activity to enhance reward-related learning and memory.(Funahashi, Y. et al., 2019)"
+
+**ARL17B: GTP-binding protein involved in protein trafficking** 
+"ARL17B warrant further assessment as candidate PSP risk genes. Our findings have implications for the mechanism of action of variants at some of the top PSP risk loci.(Mariet Allen. et al., 2016)"
+
+**NR4A3: Also known as NOR1 is a member of the nuclear receptor family of intracellular transcription factors.**
+"Recent evidence indicates that the family of the NR4A orphan nuclear receptors, which are expressed in dopamine neurons and in dopaminoceptive brain areas, may play a role in dopamine‐mediated effects.(Novak, G. et al., 2010)"
+
+**SIK1: A serine/threonine protein kinase that contains a ubiquitin-associated (UBA) domain.**
+"Cocaine induces the expression of MEF2C transcription factor in rat striatum through activation of SIK1 and phosphorylation of the histone deacetylase HDAC5"
+"Salt-inducible kinase 1 (SIK1) is induced by alcohol and suppresses microglia inflammation via NF-κB signaling"
+"Loss of the conserved PKA sites of SIK1 and SIK2 increases sleep need"
